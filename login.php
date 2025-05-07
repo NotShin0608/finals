@@ -7,45 +7,35 @@ if (isset($_SESSION['user_id'])) {
     exit();
 }
 
-// Include necessary files
 require_once 'config/functions.php';
 
 $error = '';
+$username = '';
 
-// Process login form
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $username = $_POST['username'] ?? '';
+    $username = trim($_POST['username'] ?? '');
     $password = $_POST['password'] ?? '';
     
     if (empty($username) || empty($password)) {
         $error = 'Please enter both username and password';
     } else {
-        $user = authenticateUser($username, $password);
+        $result = validateLogin($username, $password);
         
-        if ($user) {
+        if ($result['success']) {
             // Set session variables
-            $_SESSION['user_id'] = $user['id'];
-            $_SESSION['username'] = $user['username'];
-            $_SESSION['full_name'] = $user['full_name'];
-            $_SESSION['role'] = $user['role'];
+            $_SESSION['user_id'] = $result['user']['id'];
+            $_SESSION['username'] = $result['user']['username'];
+            $_SESSION['role'] = $result['user']['role'];
+            $_SESSION['full_name'] = $result['user']['full_name'];
             
-            // Log user access
-            $conn = getConnection();
-            $sql = "INSERT INTO user_access_logs (user_id, ip_address, user_agent) VALUES (?, ?, ?)";
-            $stmt = $conn->prepare($sql);
-            $ip = $_SERVER['REMOTE_ADDR'];
-            $userAgent = $_SERVER['HTTP_USER_AGENT'];
-            $stmt->bind_param("iss", $user['id'], $ip, $userAgent);
-            $stmt->execute();
-            $accessLogId = $conn->insert_id;
-            $_SESSION['access_log_id'] = $accessLogId;
-            closeConnection($conn);
+            // Log the login
+            logUserLogin($result['user']['id']);
             
             // Redirect to dashboard
             header("Location: index.php");
             exit();
         } else {
-            $error = 'Invalid username or password';
+            $error = $result['message'];
         }
     }
 }
@@ -84,29 +74,35 @@ $pageTitle = "Login";
         </div>
         <div class="card shadow-sm">
             <div class="card-header bg-primary text-white text-center">
-                <h4>Financial Management System</h4>
+                <h4>Login</h4>
             </div>
             <div class="card-body">
                 <?php if (!empty($error)): ?>
-                <div class="alert alert-danger"><?php echo $error; ?></div>
+                    <div class="alert alert-danger"><?php echo $error; ?></div>
                 <?php endif; ?>
                 
-                <form action="" method="POST">
+                <form action="" method="POST" novalidate>
                     <div class="mb-3">
                         <label for="username" class="form-label">Username</label>
-                        <input type="text" class="form-control" id="username" name="username" required>
+                        <input type="text" class="form-control" id="username" name="username" required 
+                               value="<?php echo htmlspecialchars($username); ?>">
                     </div>
+                    
                     <div class="mb-3">
                         <label for="password" class="form-label">Password</label>
                         <input type="password" class="form-control" id="password" name="password" required>
                     </div>
+                    
                     <div class="d-grid">
                         <button type="submit" class="btn btn-primary">Login</button>
                     </div>
+                    
+                    <hr class="my-4">
+                    <div class="text-center">
+                        <p class="mb-0">Don't have an account?</p>
+                        <a href="register.php" class="btn btn-link">Register Now</a>
+                    </div>
                 </form>
-            </div>
-            <div class="card-footer text-center">
-                <small class="text-muted">© <?php echo date('Y'); ?> Financial Management System</small>
             </div>
         </div>
     </div>

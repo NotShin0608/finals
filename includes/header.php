@@ -1,15 +1,24 @@
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title><?php echo isset($pageTitle) ? $pageTitle . ' - ' : ''; ?>Financial Management System</title>
-
-<!-- Make sure paths are correct for XAMPP -->
-<link rel="stylesheet" href="<?php echo rtrim(dirname($_SERVER['PHP_SELF']), '/') . '/'; ?>assets/css/bootstrap.min.css">
-<link rel="stylesheet" href="<?php echo rtrim(dirname($_SERVER['PHP_SELF']), '/') . '/'; ?>assets/css/style.css">
-<link rel="icon" href="<?php echo rtrim(dirname($_SERVER['PHP_SELF']), '/') . '/'; ?>assets/img/favicon.ico" type="image/x-icon">
-
-<!-- Add Bootstrap Icons -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
-<!-- Add Chart.js for forecasting -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script src="<?php echo rtrim(dirname($_SERVER['PHP_SELF']), '/') . '/'; ?>assets/js/jquery.min.js"></script>
-<script src="<?php echo rtrim(dirname($_SERVER['PHP_SELF']), '/') . '/'; ?>assets/js/bootstrap.bundle.min.js"></script>
+<header class="navbar navbar-expand-md navbar-light sticky-top bg-white">
+    <div class="container-fluid">
+        <button class="navbar-toggler" type="button" id="sidebarToggle">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <img src="assets/img/logo.png" class="navbar-brand" style="width: 50px; height: 50px;">
+        <a class="navbar-brand" href="index.php">Financial Management System</a>
+        
+        <div class="d-flex align-items-center">
+            <div class="dropdown">
+                <button class="btn btn-link dropdown-toggle text-dark text-decoration-none" type="button" id="userDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                    <i class="bi bi-person-circle"></i>
+                    <?php echo $_SESSION['username']; ?>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="userDropdown">
+                    <li><a class="dropdown-item" href="profile.php"><i class="bi bi-person me-2"></i>Profile</a></li>
+                    <li><a class="dropdown-item" href="settings.php"><i class="bi bi-gear me-2"></i>Settings</a></li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li><a class="dropdown-item" href="logout.php"><i class="bi bi-box-arrow-right me-2"></i>Logout</a></li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</header>

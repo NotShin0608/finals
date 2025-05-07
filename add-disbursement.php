@@ -179,5 +179,232 @@ $newVoucher = generateVoucherNumber('CD');
     </div>
     
     <?php include 'includes/footer.php'; ?>
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Initialize the page
+        updateDateTime();
+        setInterval(updateDateTime, 1000);
+        
+        // Add row button handler
+        document.getElementById('addRow').addEventListener('click', addNewRow);
+        
+        // Setup initial row
+        setupRowEventListeners(document.querySelector('.entry-row'));
+        
+        // Form validation
+        document.getElementById('transactionForm').addEventListener('submit', validateForm);
+    });
+
+    function addNewRow() {
+        const tbody = document.querySelector('#entriesTable tbody');
+        const template = `
+            <tr class="entry-row">
+                <td>
+                    <select class="form-select account-select" name="account_id[]" required>
+                        <option value="">Select Account</option>
+                        <?php foreach ($accounts as $account): ?>
+                        <option value="<?php echo $account['id']; ?>" 
+                                data-type="<?php echo $account['account_type']; ?>">
+                            <?php echo htmlspecialchars($account['account_code'] . ' - ' . $account['account_name']); ?>
+                        </option>
+                        <?php endforeach; ?>
+                    </select>
+                </td>
+                <td>
+                    <input type="number" class="form-control debit-amount" 
+                           name="debit_amount[]" step="0.01" min="0" value="0.00">
+                </td>
+                <td>
+                    <input type="number" class="form-control credit-amount" 
+                           name="credit_amount[]" step="0.01" min="0" value="0.00">
+                </td>
+                <td>
+                    <button type="button" class="btn btn-danger btn-sm remove-row">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </td>
+            </tr>
+        `;
+        
+        // Add new row
+        tbody.insertAdjacentHTML('beforeend', template);
+        
+        // Setup event listeners for the new row
+        const newRow = tbody.lastElementChild;
+        setupRowEventListeners(newRow);
+        
+        // Enable remove buttons if there's more than one row
+        updateRemoveButtons();
+    }
+
+    function setupRowEventListeners(row) {
+        const debitInput = row.querySelector('.debit-amount');
+        const creditInput = row.querySelector('.credit-amount');
+        const removeButton = row.querySelector('.remove-row');
+        const accountSelect = row.querySelector('.account-select');
+
+        // Handle debit amount changes
+        debitInput.addEventListener('input', function() {
+            const value = parseFloat(this.value) || 0;
+            if (value > 0) {
+                creditInput.value = '0.00';
+                creditInput.disabled = true;
+            } else {
+                creditInput.disabled = false;
+            }
+            updateTotals();
+        });
+
+        // Handle credit amount changes
+        creditInput.addEventListener('input', function() {
+            const value = parseFloat(this.value) || 0;
+            if (value > 0) {
+                debitInput.value = '0.00';
+                debitInput.disabled = true;
+            } else {
+                debitInput.disabled = false;
+            }
+            updateTotals();
+        });
+
+        // Format numbers on blur
+        debitInput.addEventListener('blur', formatNumber);
+        creditInput.addEventListener('blur', formatNumber);
+
+        // Remove row handler
+        removeButton.addEventListener('click', function() {
+            if (document.querySelectorAll('.entry-row').length > 1) {
+                row.remove();
+                updateTotals();
+                updateRemoveButtons();
+            }
+        });
+
+        // Account select handler
+        accountSelect.addEventListener('change', function() {
+            row.classList.toggle('table-warning', !this.value);
+            updateTotals();
+        });
+    }
+
+    function updateRemoveButtons() {
+        const rows = document.querySelectorAll('.entry-row');
+        rows.forEach(row => {
+            row.querySelector('.remove-row').disabled = rows.length === 1;
+        });
+    }
+
+    function formatNumber() {
+        this.value = parseFloat(this.value || 0).toFixed(2);
+    }
+
+    function updateTotals() {
+        let totalDebit = 0;
+        let totalCredit = 0;
+        let isValid = true;
+
+        // Calculate totals
+        document.querySelectorAll('.entry-row').forEach(row => {
+            const debit = parseFloat(row.querySelector('.debit-amount').value) || 0;
+            const credit = parseFloat(row.querySelector('.credit-amount').value) || 0;
+            const account = row.querySelector('.account-select').value;
+
+            totalDebit += debit;
+            totalCredit += credit;
+
+            // Validate row
+            if (account && (debit <= 0 && credit <= 0)) {
+                isValid = false;
+                row.classList.add('table-danger');
+            } else if (debit > 0 && credit > 0) {
+                isValid = false;
+                row.classList.add('table-danger');
+            } else {
+                row.classList.remove('table-danger');
+            }
+        });
+
+        // Update displays
+        document.getElementById('totalDebit').textContent = totalDebit.toFixed(2);
+        document.getElementById('totalCredit').textContent = totalCredit.toFixed(2);
+
+        // Check if balanced
+        const isBalanced = Math.abs(totalDebit - totalCredit) < 0.01;
+        
+        // Update total displays
+        document.getElementById('totalDebit').className = isBalanced ? 'balanced' : 'unbalanced';
+        document.getElementById('totalCredit').className = isBalanced ? 'balanced' : 'unbalanced';
+
+        // Enable/disable submit button
+        document.getElementById('submitButton').disabled = !isBalanced || !isValid;
+    }
+
+    function validateForm(e) {
+        e.preventDefault();
+
+        const rows = document.querySelectorAll('.entry-row');
+        let isValid = true;
+        let hasEntries = false;
+
+        rows.forEach(row => {
+            const account = row.querySelector('.account-select').value;
+            const debit = parseFloat(row.querySelector('.debit-amount').value) || 0;
+            const credit = parseFloat(row.querySelector('.credit-amount').value) || 0;
+
+            if (account) {
+                hasEntries = true;
+                if (debit <= 0 && credit <= 0) {
+                    isValid = false;
+                    row.classList.add('table-danger');
+                } else if (debit > 0 && credit > 0) {
+                    isValid = false;
+                    row.classList.add('table-danger');
+                }
+            }
+        });
+
+        if (!hasEntries) {
+            alert('Please add at least one valid entry.');
+            return false;
+        }
+
+        if (!isValid) {
+            alert('Please correct the highlighted entries.');
+            return false;
+        }
+
+        const totalDebit = parseFloat(document.getElementById('totalDebit').textContent);
+        const totalCredit = parseFloat(document.getElementById('totalCredit').textContent);
+
+        if (Math.abs(totalDebit - totalCredit) >= 0.01) {
+            alert('Total debits must equal total credits.');
+            return false;
+        }
+
+        if (confirm('Are you sure you want to save this transaction?')) {
+            e.target.submit();
+        }
+    }
+
+    // Update datetime display
+    function updateDateTime() {
+        const now = new Date();
+        const formatted = now.getUTCFullYear() + '-' + 
+                        String(now.getUTCMonth() + 1).padStart(2, '0') + '-' + 
+                        String(now.getUTCDate()).padStart(2, '0') + ' ' + 
+                        String(now.getUTCHours()).padStart(2, '0') + ':' + 
+                        String(now.getUTCMinutes()).padStart(2, '0') + ':' + 
+                        String(now.getUTCSeconds()).padStart(2, '0');
+        document.getElementById('currentDateTime').textContent = formatted;
+    }
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', function(e) {
+        if (e.altKey && e.key === 'n') { // Alt + N
+            e.preventDefault();
+            addNewRow();
+        }
+    });
+</script>
 </body>
 </html>

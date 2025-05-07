@@ -511,3 +511,231 @@ function getIncomeStatement($startDate, $endDate) {
     ];
 }
 
+// Function to get total number of ledger entries
+function getTotalLedgerEntries($filters = []) {
+    $conn = getConnection();
+    
+    $sql = "SELECT COUNT(DISTINCT t.id) as total 
+            FROM transactions t 
+            JOIN transaction_details td ON t.id = td.transaction_id 
+            JOIN accounts a ON td.account_id = a.id 
+            WHERE 1=1";
+    
+    $params = [];
+    $types = "";
+    
+    // Add date range filter
+    if (!empty($filters['start_date']) && !empty($filters['end_date'])) {
+        $sql .= " AND t.transaction_date BETWEEN ? AND ?";
+        $params[] = $filters['start_date'];
+        $params[] = $filters['end_date'];
+        $types .= "ss";
+    }
+    
+    // Add reference number filter
+    if (!empty($filters['reference'])) {
+        $sql .= " AND t.reference_number LIKE ?";
+        $params[] = "%" . $filters['reference'] . "%";
+        $types .= "s";
+    }
+    
+    // Add account filter
+    if (!empty($filters['account'])) {
+        $sql .= " AND a.account_code LIKE ?";
+        $params[] = "%" . $filters['account'] . "%";
+        $types .= "s";
+    }
+    
+    $stmt = $conn->prepare($sql);
+    
+    if (!empty($params)) {
+        $stmt->bind_param($types, ...$params);
+    }
+    
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $row = $result->fetch_assoc();
+    
+    $stmt->close();
+    closeConnection($conn);
+    
+    return (int)$row['total'];
+}
+
+// Add this to your config/functions.php file
+
+if (!function_exists('updateAccountBalance')) {
+    function updateAccountBalance($conn, $accountId, $debitAmount, $creditAmount) {
+        try {
+            // Get account type
+            $stmt = $conn->prepare("SELECT account_type FROM accounts WHERE id = ?");
+            $stmt->bind_param("i", $accountId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $account = $result->fetch_assoc();
+            
+            if (!$account) {
+                throw new Exception("Account not found");
+            }
+            
+            // Calculate balance change based on account type
+            $balanceChange = 0;
+            
+            switch ($account['account_type']) {
+                case 'Asset':
+                case 'Expense':
+                    // For Asset and Expense accounts:
+                    // Debit increases the balance, Credit decreases it
+                    $balanceChange = $debitAmount - $creditAmount;
+                    break;
+                    
+                case 'Liability':
+                case 'Equity':
+                case 'Revenue':
+                    // For Liability, Equity, and Revenue accounts:
+                    // Credit increases the balance, Debit decreases it
+                    $balanceChange = $creditAmount - $debitAmount;
+                    break;
+                    
+                default:
+                    throw new Exception("Invalid account type");
+            }
+            
+            // Update the account balance
+            $stmt = $conn->prepare("UPDATE accounts SET balance = balance + ? WHERE id = ?");
+            $stmt->bind_param("di", $balanceChange, $accountId);
+            $stmt->execute();
+            
+            if ($stmt->affected_rows === 0) {
+                throw new Exception("Failed to update account balance");
+            }
+            
+            return true;
+        } catch (Exception $e) {
+            // Log the error and rethrow it
+            error_log("Error in updateAccountBalance: " . $e->getMessage());
+            throw $e;
+        }
+    }
+}
+
+// Also make sure you have this function for generating reference numbers
+if (!function_exists('generateReferenceNumber')) {
+    function generateReferenceNumber($prefix = 'JE', $date = null) {
+        $date = $date ?? date('Y-m-d');
+        $conn = getConnection();
+        
+        try {
+            // Get date components
+            $dateObj = new DateTime($date);
+            $year = $dateObj->format('y');
+            $month = $dateObj->format('m');
+            $day = $dateObj->format('d');
+            
+            // Get max reference number for today
+            $sql = "SELECT MAX(reference_number) as max_ref 
+                    FROM transactions 
+                    WHERE reference_number LIKE ?";
+            $pattern = $prefix . $year . $month . $day . '%';
+            
+            $stmt = $conn->prepare($sql);
+            $stmt->bind_param('s', $pattern);
+            $stmt->execute();
+            $result = $stmt->get_result()->fetch_assoc();
+            
+            if ($result['max_ref']) {
+                // Extract sequence number and increment
+                $sequence = intval(substr($result['max_ref'], -4)) + 1;
+            } else {
+                $sequence = 1;
+            }
+            
+            // Format new reference number
+            $reference = $prefix . $year . $month . $day . str_pad($sequence, 4, '0', STR_PAD_LEFT);
+            
+            return $reference;
+        } finally {
+            closeConnection($conn);
+        }
+    }
+}
+
+// And make sure you have this function for getting all accounts
+if (!function_exists('getAllAccounts')) {
+    function getAllAccounts() {
+        $conn = getConnection();
+        try {
+            $sql = "SELECT id, account_code, account_name, account_type, balance 
+                    FROM accounts 
+                    WHERE status = 'Active' 
+                    ORDER BY account_code";
+            
+            $result = $conn->query($sql);
+            $accounts = [];
+            
+            while ($row = $result->fetch_assoc()) {
+                $accounts[] = $row;
+            }
+            
+            return $accounts;
+        } finally {
+            closeConnection($conn);
+        }
+    }
+}
+
+function validateLogin($username, $password) {
+    $conn = getConnection();
+    
+    $sql = "SELECT id, username, password, role, full_name FROM users WHERE username = ?";
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param("s", $username);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    
+    if ($result->num_rows === 1) {
+        $user = $result->fetch_assoc();
+        if (password_verify($password, $user['password'])) {
+            // Check if user is unverified
+            if ($user['role'] === '') {
+                return ['success' => false, 'message' => 'Your account is pending verification. Please wait for administrator approval before accessing the system.'];
+            }
+            
+            // Valid login
+            return [
+                'success' => true,
+                'user' => [
+                    'id' => $user['id'],
+                    'username' => $user['username'],
+                    'role' => $user['role'],
+                    'full_name' => $user['full_name']
+                ]
+            ];
+        }
+    }
+    
+    closeConnection($conn);
+    return ['success' => false, 'message' => 'Invalid username or password'];
+}
+
+function getUserRole($userId) {
+    $conn = getConnection();
+    try {
+        $stmt = $conn->prepare("SELECT role FROM users WHERE id = ?");
+        $stmt->bind_param("i", $userId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $user = $result->fetch_assoc();
+        return $user['role'] ?? 'user';
+    } finally {
+        $conn->close();
+    }
+}
+
+function isAdmin($userId) {
+    return getUserRole($userId) === 'admin';
+}
+
+function isAccountant($userId) {
+    return getUserRole($userId) === 'accountant';
+}
