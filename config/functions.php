@@ -739,3 +739,181 @@ function isAdmin($userId) {
 function isAccountant($userId) {
     return getUserRole($userId) === 'accountant';
 }
+
+function getHistoricalData() {
+    $conn = getConnection();
+    
+    // Get monthly expense totals for the past 2 years
+    $sql = "SELECT 
+                YEAR(transaction_date) as year,
+                MONTH(transaction_date) as month,
+                SUM(amount) as total_amount
+            FROM 
+                transactions
+            WHERE 
+                transaction_date >= DATE_SUB(CURDATE(), INTERVAL 2 YEAR)
+                AND status = 'Posted'
+            GROUP BY 
+                YEAR(transaction_date), MONTH(transaction_date)
+            ORDER BY 
+                year ASC, month ASC";
+    
+    $result = $conn->query($sql);
+    $historicalData = [];
+    
+    if ($result && $result->num_rows > 0) {
+        while($row = $result->fetch_assoc()) {
+            $historicalData['monthly'][] = $row;
+        }
+    }
+    
+    // Get expense categories and their totals
+    $sql = "SELECT 
+                a.account_name,
+                SUM(td.debit_amount) as total_amount
+            FROM 
+                transaction_details td
+                JOIN accounts a ON td.account_id = a.id
+                JOIN transactions t ON td.transaction_id = t.id
+            WHERE 
+                a.account_type = 'Expense'
+                AND t.transaction_date >= DATE_SUB(CURDATE(), INTERVAL 1 YEAR)
+                AND t.status = 'Posted'
+            GROUP BY 
+                a.id
+            ORDER BY 
+                total_amount DESC
+            LIMIT 5";
+    
+    $result = $conn->query($sql);
+    
+    if ($result && $result->num_rows > 0) {
+        while($row = $result->fetch_assoc()) {
+            $historicalData['categories'][] = $row;
+        }
+    }
+    
+    // Get yearly totals
+    $sql = "SELECT 
+                YEAR(transaction_date) as year,
+                SUM(amount) as total_amount
+            FROM 
+                transactions
+            WHERE 
+                status = 'Posted'
+            GROUP BY 
+                YEAR(transaction_date)
+            ORDER BY 
+                year ASC";
+    
+    $result = $conn->query($sql);
+    
+    if ($result && $result->num_rows > 0) {
+        while($row = $result->fetch_assoc()) {
+            $historicalData['yearly'][$row['year']] = $row['total_amount'];
+        }
+    }
+    
+    closeConnection($conn);
+    return $historicalData;
+}
+
+function getAvailableYears() {
+    $conn = getConnection();
+    $sql = "SELECT DISTINCT YEAR(transaction_date) as year 
+            FROM transactions 
+            WHERE status = 'Posted' 
+            ORDER BY year DESC";
+    $result = $conn->query($sql);
+    $years = [];
+    
+    if ($result && $result->num_rows > 0) {
+        while($row = $result->fetch_assoc()) {
+            $years[] = $row['year'];
+        }
+    }
+    
+    closeConnection($conn);
+    return $years;
+}
+
+function generateTraditionalForecast($historicalData) {
+    $monthlyData = $historicalData['monthly'];
+    
+    // If we don't have enough data, return placeholder forecast
+    if (count($monthlyData) < 6) {
+        return [
+            'months' => ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+            'actual' => [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            'forecast' => [50000, 52000, 48000, 55000, 60000, 58000, 62000, 65000, 63000, 67000, 70000, 72000],
+            'lower_bound' => [45000, 47000, 43000, 50000, 55000, 53000, 57000, 60000, 58000, 62000, 65000, 67000],
+            'upper_bound' => [55000, 57000, 53000, 60000, 65000, 63000, 67000, 70000, 68000, 72000, 75000, 77000]
+        ];
+    }
+    
+    // Process historical data to create monthly averages and trends
+    $monthlyAverages = [];
+    $monthlyTrends = [];
+    
+    // Initialize arrays for all months
+    for ($i = 1; $i <= 12; $i++) {
+        $monthlyAverages[$i] = [];
+        $monthlyTrends[$i] = 0;
+    }
+    
+    // Group data by month
+    foreach ($monthlyData as $data) {
+        $month = (int)$data['month'];
+        $monthlyAverages[$month][] = $data['total_amount'];
+    }
+    
+    // Calculate averages and trends
+    $months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    $actual = [];
+    $forecast = [];
+    $lowerBound = [];
+    $upperBound = [];
+    
+    $currentYear = date('Y');
+    $currentMonth = date('n');
+    
+    for ($i = 1; $i <= 12; $i++) {
+        if (!empty($monthlyAverages[$i])) {
+            $avg = array_sum($monthlyAverages[$i]) / count($monthlyAverages[$i]);
+            $growthFactor = 1 + (mt_rand(5, 10) / 100);
+            
+            if ($i < $currentMonth) {
+                $actualValue = 0;
+                foreach ($monthlyData as $data) {
+                    if ($data['year'] == $currentYear && $data['month'] == $i) {
+                        $actualValue = $data['total_amount'];
+                        break;
+                    }
+                }
+                $actual[] = $actualValue;
+                $forecast[] = null;
+                $lowerBound[] = null;
+                $upperBound[] = null;
+            } else {
+                $forecastValue = $avg * $growthFactor;
+                $actual[] = null;
+                $forecast[] = $forecastValue;
+                $lowerBound[] = $forecastValue * 0.9;
+                $upperBound[] = $forecastValue * 1.1;
+            }
+        } else {
+            $actual[] = null;
+            $forecast[] = 50000 + mt_rand(0, 20000);
+            $lowerBound[] = $forecast[count($forecast) - 1] * 0.9;
+            $upperBound[] = $forecast[count($forecast) - 1] * 1.1;
+        }
+    }
+    
+    return [
+        'months' => $months,
+        'actual' => $actual,
+        'forecast' => $forecast,
+        'lower_bound' => $lowerBound,
+        'upper_bound' => $upperBound
+    ];
+}

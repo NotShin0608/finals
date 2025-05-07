@@ -9,173 +9,99 @@ if (!isset($_SESSION['user_id'])) {
 
 // Include necessary files
 require_once 'config/functions.php';
+require_once 'config/api_config.php';
+require_once 'classes/DeepSeekClient.php';
 
-// Get historical transaction data for forecasting
-function getHistoricalData() {
-    $conn = getConnection();
-    
-    // Get monthly expense totals for the past 2 years
-    $sql = "SELECT 
-                YEAR(transaction_date) as year,
-                MONTH(transaction_date) as month,
-                SUM(amount) as total_amount
-            FROM 
-                transactions
-            WHERE 
-                transaction_date >= DATE_SUB(CURDATE(), INTERVAL 2 YEAR)
-                AND status = 'Posted'
-            GROUP BY 
-                YEAR(transaction_date), MONTH(transaction_date)
-            ORDER BY 
-                year ASC, month ASC";
-    
-    $result = $conn->query($sql);
-    $historicalData = [];
-    
-    if ($result->num_rows > 0) {
-        while($row = $result->fetch_assoc()) {
-            $historicalData[] = $row;
+// Get selected year (default to current year if not specified)
+$selectedYear = isset($_GET['year']) ? intval($_GET['year']) : date('Y');
+$showForecast = isset($_POST['generate_forecast']);
+
+// Initialize API client
+$deepseekClient = new DeepSeekClient();
+$forecastData = null;
+$aiFeedback = null;
+
+if ($showForecast) {
+    try {
+        $historicalData = getHistoricalData();
+        $availableYears = getAvailableYears();
+        
+        try {
+            $forecastData = $deepseekClient->generateForecast($historicalData, $selectedYear);
+            $aiFeedback = $deepseekClient->generateBudgetAnalysis($historicalData, $selectedYear);
+            $forecastSource = 'ai';
+            $apiStatus = 'online';
+        } catch (Exception $e) {
+            $forecastData = generateTraditionalForecast($historicalData);
+            $aiFeedback = [
+                'feedback' => "Using traditional statistical analysis. The system will provide basic insights based on historical data."
+            ];
+            $forecastSource = 'traditional';
+            $apiStatus = 'offline';
+            error_log("DeepSeek API Error: " . $e->getMessage());
         }
+    } catch (Exception $e) {
+        die("Error: " . $e->getMessage());
     }
-    
-    // Get expense categories and their totals
-    $sql = "SELECT 
-                a.account_name,
-                SUM(td.debit_amount) as total_amount
-            FROM 
-                transaction_details td
-                JOIN accounts a ON td.account_id = a.id
-                JOIN transactions t ON td.transaction_id = t.id
-            WHERE 
-                a.account_type = 'Expense'
-                AND t.transaction_date >= DATE_SUB(CURDATE(), INTERVAL 1 YEAR)
-                AND t.status = 'Posted'
-            GROUP BY 
-                a.id
-            ORDER BY 
-                total_amount DESC
-            LIMIT 5";
-    
-    $result = $conn->query($sql);
-    $expenseCategories = [];
-    
-    if ($result->num_rows > 0) {
-        while($row = $result->fetch_assoc()) {
-            $expenseCategories[] = $row;
-        }
-    }
-    
-    closeConnection($conn);
-    
-    return [
-        'monthly' => $historicalData,
-        'categories' => $expenseCategories
-    ];
 }
 
-// Generate forecast data based on historical data
-function generateForecast($historicalData) {
-    $monthlyData = $historicalData['monthly'];
-    
-    // If we don't have enough data, return placeholder forecast
-    if (count($monthlyData) < 6) {
-        return [
-            'months' => ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
-            'actual' => [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            'forecast' => [50000, 52000, 48000, 55000, 60000, 58000, 62000, 65000, 63000, 67000, 70000, 72000],
-            'lower_bound' => [45000, 47000, 43000, 50000, 55000, 53000, 57000, 60000, 58000, 62000, 65000, 67000],
-            'upper_bound' => [55000, 57000, 53000, 60000, 65000, 63000, 67000, 70000, 68000, 72000, 75000, 77000]
-        ];
-    }
-    
-    // Process historical data to create monthly averages and trends
-    $monthlyAverages = [];
-    $monthlyTrends = [];
-    
-    // Initialize arrays for all months
-    for ($i = 1; $i <= 12; $i++) {
-        $monthlyAverages[$i] = [];
-        $monthlyTrends[$i] = 0;
-    }
-    
-    // Group data by month
-    foreach ($monthlyData as $data) {
-        $month = (int)$data['month'];
-        $monthlyAverages[$month][] = $data['total_amount'];
-    }
-    
-    // Calculate averages and trends
-    $months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    $actual = [];
-    $forecast = [];
-    $lowerBound = [];
-    $upperBound = [];
-    
-    $currentYear = date('Y');
-    $currentMonth = date('n');
-    
-    for ($i = 1; $i <= 12; $i++) {
-        // Calculate average for this month
-        if (!empty($monthlyAverages[$i])) {
-            $avg = array_sum($monthlyAverages[$i]) / count($monthlyAverages[$i]);
-            
-            // Apply a growth factor (5-10% annual growth)
-            $growthFactor = 1 + (mt_rand(5, 10) / 100);
-            
-            // For past months of current year, use actual data
-            if ($i < $currentMonth) {
-                // Find the actual value for the current year and month
-                $actualValue = 0;
-                foreach ($monthlyData as $data) {
-                    if ($data['year'] == $currentYear && $data['month'] == $i) {
-                        $actualValue = $data['total_amount'];
-                        break;
-                    }
-                }
-                $actual[] = $actualValue;
-                $forecast[] = null; // No forecast for past months
-                $lowerBound[] = null;
-                $upperBound[] = null;
-            } else {
-                // For future months, generate forecast
-                $forecastValue = $avg * $growthFactor;
-                $actual[] = null; // No actual data for future months
-                $forecast[] = $forecastValue;
-                $lowerBound[] = $forecastValue * 0.9; // 10% lower bound
-                $upperBound[] = $forecastValue * 1.1; // 10% upper bound
-            }
-        } else {
-            // No historical data for this month
-            $actual[] = null;
-            $forecast[] = 50000 + mt_rand(0, 20000); // Random placeholder
-            $lowerBound[] = $forecast[count($forecast) - 1] * 0.9;
-            $upperBound[] = $forecast[count($forecast) - 1] * 1.1;
-        }
-    }
-    
-    return [
-        'months' => $months,
-        'actual' => $actual,
-        'forecast' => $forecast,
-        'lower_bound' => $lowerBound,
-        'upper_bound' => $upperBound
-    ];
-}
-
-// Get historical data
-$historicalData = getHistoricalData();
-
-// Generate forecast
-$forecastData = generateForecast($historicalData);
-
-// Set page title
-$pageTitle = "Budget Forecast";
+$pageTitle = "Budget Forecast for " . $selectedYear;
 ?>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <?php include 'includes/head.php'; ?>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        .year-selector {
+            margin-bottom: 20px;
+        }
+        .api-status {
+            font-size: 0.8em;
+            margin-left: 10px;
+        }
+        .api-status.online {
+            color: green;
+        }
+        .api-status.offline {
+            color: red;
+        }
+        .forecast-source {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 10px;
+        }
+        .analysis-card {
+            border-left: 4px solid #0d6efd;
+            box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+        }
+        .analysis-paragraph {
+            margin-bottom: 1rem;
+            line-height: 1.6;
+            color: #2c3e50;
+        }
+        .analysis-paragraph:last-child {
+            margin-bottom: 0;
+        }
+        .badge {
+            padding: 0.5em 1em;
+        }
+        #forecastChart {
+            min-height: 400px;
+        }
+        .loading {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255, 255, 255, 0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+        }
+    </style>
 </head>
 <body>
     <?php include 'includes/header.php'; ?>
@@ -186,9 +112,37 @@ $pageTitle = "Budget Forecast";
             
             <main class="col-md-9 ms-sm-auto col-lg-10 px-md-4">
                 <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
-                    <h1 class="h2">Budget Forecast</h1>
+                    <h1 class="h2">
+                        Budget Forecast
+                        <?php if ($showForecast): ?>
+                        <span class="api-status <?php echo $apiStatus; ?>">
+                            <i class="bi bi-robot"></i> 
+                            <?php echo $apiStatus === 'online' ? 'AI-Powered' : 'Traditional'; ?>
+                        </span>
+                        <?php endif; ?>
+                    </h1>
+                    
                     <div class="btn-toolbar mb-2 mb-md-0">
                         <div class="btn-group me-2">
+                            <select class="form-select form-select-sm year-selector" id="yearSelector">
+                                <?php
+                                $currentYear = date('Y');
+                                for ($year = $currentYear + 5; $year >= $currentYear - 2; $year--) {
+                                    $selected = ($year == $selectedYear) ? 'selected' : '';
+                                    echo "<option value='$year' $selected>$year</option>";
+                                }
+                                ?>
+                            </select>
+                        </div>
+                        
+                        <form method="post" class="me-2" id="forecastForm">
+                            <input type="hidden" name="year" id="selectedYearInput" value="<?php echo $selectedYear; ?>">
+                            <button type="submit" name="generate_forecast" class="btn btn-primary btn-sm">
+                                <i class="bi bi-graph-up"></i> Generate Forecast
+                            </button>
+                        </form>
+                        
+                        <div class="btn-group">
                             <button type="button" class="btn btn-sm btn-outline-secondary" onclick="window.print()">
                                 <i class="bi bi-printer"></i> Print
                             </button>
@@ -196,237 +150,196 @@ $pageTitle = "Budget Forecast";
                                 <i class="bi bi-file-earmark-excel"></i> Export
                             </button>
                         </div>
-                        <button type="button" class="btn btn-sm btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown">
-                            <i class="bi bi-calendar3"></i> Year
-                        </button>
-                        <ul class="dropdown-menu">
-                            <li><a class="dropdown-item" href="#">Current Year</a></li>
-                            <li><a class="dropdown-item" href="#">Next Year</a></li>
-                        </ul>
                     </div>
                 </div>
                 
-                <div class="row mb-4">
-                    <div class="col-md-12">
-                        <div class="card">
-                            <div class="card-header">
-                                <h5 class="card-title mb-0">Monthly Budget Forecast (<?php echo date('Y'); ?>)</h5>
-                            </div>
-                            <div class="card-body">
-                                <div class="alert alert-info">
-                                    <i class="bi bi-info-circle"></i> This forecast is generated using AI analysis of historical transaction data. The forecast shows expected budget trends with upper and lower bounds to account for variability.
-                                </div>
-                                <div class="chart-container" style="position: relative; height:400px;">
-                                    <canvas id="forecastChart"></canvas>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
+                <?php if ($showForecast && $forecastData): ?>
                 <div class="row">
-                    <div class="col-md-6">
+                    <div class="col-md-8">
                         <div class="card">
                             <div class="card-header">
-                                <h5 class="card-title mb-0">Top Expense Categories</h5>
+                                <h5 class="card-title mb-0">Budget Forecast for <?php echo $selectedYear; ?></h5>
                             </div>
                             <div class="card-body">
-                                <div class="chart-container" style="position: relative; height:300px;">
-                                    <canvas id="categoryChart"></canvas>
-                                </div>
+                                <canvas id="forecastChart"></canvas>
                             </div>
                         </div>
                     </div>
-                    <div class="col-md-6">
-                        <div class="card">
-                            <div class="card-header">
-                                <h5 class="card-title mb-0">Budget Recommendations</h5>
+                    
+                    <div class="col-md-4">
+                        <div class="card analysis-card">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                <h5 class="card-title mb-0">
+                                    <i class="bi bi-graph-up-arrow"></i> AI Budget Analysis
+                                </h5>
+                                <span class="badge <?php echo $apiStatus === 'online' ? 'bg-success' : 'bg-secondary'; ?>">
+                                    <?php echo $apiStatus === 'online' ? 'AI-Powered' : 'Statistical Analysis'; ?>
+                                </span>
                             </div>
                             <div class="card-body">
-                                <div class="alert alert-success">
-                                    <i class="bi bi-lightbulb"></i> <strong>AI Insights:</strong> Based on historical spending patterns, here are some budget recommendations:
+                                <div class="analysis-content">
+                                    <?php if (!empty($aiFeedback['feedback'])): ?>
+                                        <?php 
+                                        $paragraphs = explode("\n", $aiFeedback['feedback']);
+                                        foreach ($paragraphs as $paragraph):
+                                            if (trim($paragraph)):
+                                        ?>
+                                            <p class="analysis-paragraph">
+                                                <?php echo htmlspecialchars($paragraph); ?>
+                                            </p>
+                                        <?php 
+                                            endif;
+                                        endforeach;
+                                        ?>
+                                    <?php else: ?>
+                                        <p class="text-muted">
+                                            <i class="bi bi-info-circle"></i>
+                                            Analysis not available at this time. Please try regenerating the forecast.
+                                        </p>
+                                    <?php endif; ?>
                                 </div>
-                                <ul class="list-group">
-                                    <li class="list-group-item d-flex justify-content-between align-items-center">
-                                        Allocate more budget for high-growth months
-                                        <span class="badge bg-primary rounded-pill">Priority</span>
-                                    </li>
-                                    <li class="list-group-item d-flex justify-content-between align-items-center">
-                                        Consider cost-saving measures for top expense categories
-                                        <span class="badge bg-primary rounded-pill">Priority</span>
-                                    </li>
-                                    <li class="list-group-item d-flex justify-content-between align-items-center">
-                                        Plan for 7-10% budget increase for next fiscal year
-                                        <span class="badge bg-secondary rounded-pill">Suggestion</span>
-                                    </li>
-                                    <li class="list-group-item d-flex justify-content-between align-items-center">
-                                        Review seasonal spending patterns for optimization
-                                        <span class="badge bg-secondary rounded-pill">Suggestion</span>
-                                    </li>
-                                </ul>
+                                
+                                <?php if ($apiStatus === 'online'): ?>
+                                <div class="mt-3 text-end">
+                                    <small class="text-muted">
+                                        <i class="bi bi-clock"></i> Analysis generated on <?php echo date('Y-m-d H:i:s'); ?>
+                                    </small>
+                                </div>
+                                <?php endif; ?>
                             </div>
                         </div>
                     </div>
                 </div>
+                <?php else: ?>
+                <div class="text-center mt-5">
+                    <i class="bi bi-graph-up" style="font-size: 48px;"></i>
+                    <h4 class="mt-3">Generate Your Budget Forecast</h4>
+                    <p class="text-muted">Select a year and click "Generate Forecast" to see AI-powered budget predictions</p>
+                </div>
+                <?php endif; ?>
             </main>
+        </div>
+    </div>
+    
+    <div id="loadingOverlay" class="loading d-none">
+        <div class="text-center">
+            <div class="spinner-border text-primary mb-2" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <div>Generating AI Forecast...</div>
         </div>
     </div>
     
     <?php include 'includes/footer.php'; ?>
     
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
-        // Forecast chart
-        const forecastCtx = document.getElementById('forecastChart').getContext('2d');
-        const forecastChart = new Chart(forecastCtx, {
-            type: 'line',
-            data: {
-                labels: <?php echo json_encode($forecastData['months']); ?>,
-                datasets: [
-                    {
-                        label: 'Actual',
-                        data: <?php echo json_encode($forecastData['actual']); ?>,
-                        borderColor: 'rgba(54, 162, 235, 1)',
-                        backgroundColor: 'rgba(54, 162, 235, 0.2)',
-                        borderWidth: 2,
-                        pointRadius: 4,
-                        tension: 0.1
-                    },
-                    {
-                        label: 'Forecast',
-                        data: <?php echo json_encode($forecastData['forecast']); ?>,
-                        borderColor: 'rgba(255, 99, 132, 1)',
-                        backgroundColor: 'rgba(255, 99, 132, 0.2)',
-                        borderWidth: 2,
-                        pointRadius: 4,
-                        tension: 0.1
-                    },
-                    {
-                        label: 'Lower Bound',
-                        data: <?php echo json_encode($forecastData['lower_bound']); ?>,
-                        borderColor: 'rgba(255, 99, 132, 0.3)',
-                        backgroundColor: 'transparent',
-                        borderWidth: 1,
-                        borderDash: [5, 5],
-                        pointRadius: 0,
-                        tension: 0.1,
-                        fill: false
-                    },
-                    {
-                        label: 'Upper Bound',
-                        data: <?php echo json_encode($forecastData['upper_bound']); ?>,
-                        borderColor: 'rgba(255, 99, 132, 0.3)',
-                        backgroundColor: 'rgba(255, 99, 132, 0.1)',
-                        borderWidth: 1,
-                        borderDash: [5, 5],
-                        pointRadius: 0,
-                        tension: 0.1,
-                        fill: '-1'
-                    }
-                ]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    title: {
-                        display: true,
-                        text: 'Monthly Budget Forecast with Confidence Intervals'
-                    },
-                    tooltip: {
-                        mode: 'index',
-                        intersect: false,
-                        callbacks: {
-                            label: function(context) {
-                                let label = context.dataset.label || '';
-                                if (label) {
-                                    label += ': ';
-                                }
-                                if (context.parsed.y !== null) {
-                                    label += new Intl.NumberFormat('en-US', { style: 'currency', currency: 'PHP' }).format(context.parsed.y);
-                                }
-                                return label;
-                            }
+        document.addEventListener('DOMContentLoaded', function() {
+            const yearSelector = document.getElementById('yearSelector');
+            const selectedYearInput = document.getElementById('selectedYearInput');
+            const forecastForm = document.getElementById('forecastForm');
+            const loadingOverlay = document.getElementById('loadingOverlay');
+            
+            yearSelector.addEventListener('change', function() {
+                selectedYearInput.value = this.value;
+            });
+            
+            forecastForm.addEventListener('submit', function() {
+                loadingOverlay.classList.remove('d-none');
+            });
+            
+            <?php if ($showForecast && $forecastData): ?>
+            const ctx = document.getElementById('forecastChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: <?php echo json_encode($forecastData['months']); ?>,
+                    datasets: [
+                        {
+                            label: 'Actual',
+                            data: <?php echo json_encode($forecastData['actual']); ?>,
+                            borderColor: 'rgba(54, 162, 235, 1)',
+                            backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                            borderWidth: 2,
+                            pointRadius: 4,
+                            tension: 0.1
+                        },
+                        {
+                            label: 'Forecast',
+                            data: <?php echo json_encode($forecastData['forecast']); ?>,
+                            borderColor: 'rgba(255, 99, 132, 1)',
+                            backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                            borderWidth: 2,
+                            pointRadius: 4,
+                            tension: 0.1
+                        },
+                        {
+                            label: 'Lower Bound',
+                            data: <?php echo json_encode($forecastData['lower_bound']); ?>,
+                            borderColor: 'rgba(255, 99, 132, 0.3)',
+                            backgroundColor: 'transparent',
+                            borderWidth: 1,
+                            borderDash: [5, 5],
+                            pointRadius: 0,
+                            fill: false
+                        },
+                        {
+                            label: 'Upper Bound',
+                            data: <?php echo json_encode($forecastData['upper_bound']); ?>,
+                            borderColor: 'rgba(255, 99, 132, 0.3)',
+                            backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                            borderWidth: 1,
+                            borderDash: [5, 5],
+                            pointRadius: 0,
+                            fill: '-1'
                         }
-                    },
-                    legend: {
-                        position: 'top',
-                    }
+                    ]
                 },
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        ticks: {
-                            callback: function(value, index, values) {
-                                return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'PHP', maximumSignificantDigits: 3 }).format(value);
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: 'Monthly Budget Forecast with Confidence Intervals'
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label || '';
+                                    if (label) {
+                                        label += ': ';
+                                    }
+                                    if (context.parsed.y !== null) {
+                                        label += new Intl.NumberFormat('en-US', { 
+                                            style: 'currency', 
+                                            currency: 'PHP' 
+                                        }).format(context.parsed.y);
+                                    }
+                                    return label;
+                                }
                             }
                         }
-                    }
-                }
-            }
-        });
-        
-        // Category chart
-        const categoryCtx = document.getElementById('categoryChart').getContext('2d');
-        const categoryChart = new Chart(categoryCtx, {
-            type: 'doughnut',
-            data: {
-                labels: [
-                    <?php 
-                    foreach ($historicalData['categories'] as $category) {
-                        echo "'" . $category['account_name'] . "', ";
-                    }
-                    ?>
-                    'Other'
-                ],
-                datasets: [{
-                    data: [
-                        <?php 
-                        foreach ($historicalData['categories'] as $category) {
-                            echo $category['total_amount'] . ", ";
-                        }
-                        ?>
-                        15000
-                    ],
-                    backgroundColor: [
-                        'rgba(255, 99, 132, 0.7)',
-                        'rgba(54, 162, 235, 0.7)',
-                        'rgba(255, 206, 86, 0.7)',
-                        'rgba(75, 192, 192, 0.7)',
-                        'rgba(153, 102, 255, 0.7)',
-                        'rgba(201, 203, 207, 0.7)'
-                    ],
-                    borderWidth: 1
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    title: {
-                        display: true,
-                        text: 'Top Expense Categories'
                     },
-                    tooltip: {
-                        callbacks: {
-                            label: function(context) {
-                                let label = context.label || '';
-                                if (label) {
-                                    label += ': ';
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                callback: function(value) {
+                                    return new Intl.NumberFormat('en-US', {
+                                        style: 'currency',
+                                        currency: 'PHP',
+                                        maximumSignificantDigits: 3
+                                    }).format(value);
                                 }
-                                if (context.parsed !== null) {
-                                    label += new Intl.NumberFormat('en-US', { style: 'currency', currency: 'PHP' }).format(context.parsed);
-                                }
-                                return label;
                             }
                         }
                     }
                 }
-            }
-        });
-        
-        // Export button functionality
-        document.getElementById('exportBtn').addEventListener('click', function() {
-            alert('Export functionality would be implemented here. This would export the forecast data to Excel or CSV format.');
+            });
+            <?php endif; ?>
         });
     </script>
 </body>
