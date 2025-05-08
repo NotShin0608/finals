@@ -141,15 +141,6 @@ $pageTitle = "Budget Forecast for " . $selectedYear;
                                 <i class="bi bi-graph-up"></i> Generate Forecast
                             </button>
                         </form>
-                        
-                        <div class="btn-group">
-                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="window.print()">
-                                <i class="bi bi-printer"></i> Print
-                            </button>
-                            <button type="button" class="btn btn-sm btn-outline-secondary" id="exportBtn">
-                                <i class="bi bi-file-earmark-excel"></i> Export
-                            </button>
-                        </div>
                     </div>
                 </div>
                 

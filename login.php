@@ -25,7 +25,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Set session variables
             $_SESSION['user_id'] = $result['user']['id'];
             $_SESSION['username'] = $result['user']['username'];
-            $_SESSION['role'] = $result['user']['role'];
+            $_SESSION['user_role'] = $result['user']['role'];
             $_SESSION['full_name'] = $result['user']['full_name'];
             
             // Log the login

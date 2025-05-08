@@ -263,7 +263,7 @@ if (!empty($_GET['status'])) {
         <?php if (isAdmin($_SESSION['user_id'])): ?>
         <button type="button" class="btn btn-info" onclick="showApprovalsModal()">
             <i class="bi bi-check-circle"></i> Approvals
-            <span class="badge bg-danger pending-count">0</span>
+            <span class="badge bg-danger pending-count"></span>
         </button>
         <?php endif; ?>
         <a href="add-transaction.php" class="btn btn-primary">
